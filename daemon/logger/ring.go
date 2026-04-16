@@ -128,8 +128,12 @@ func (r *ringLogger) run() {
 			// buffer is closed
 			return
 		}
-		if err := r.l.Log(msg); err != nil {
-			logDriverError(r.l.Name(), string(msg.Line), err)
+		for {
+			if err := r.l.Log(msg); err != nil {
+				logDriverError(r.l.Name(), string(msg.Line), err)
+			} else {
+				break
+			}
 		}
 	}
 }

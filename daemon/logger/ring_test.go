@@ -14,12 +14,36 @@ func (l *mockLogger) Log(msg *Message) error {
 	l.c <- msg
 	return nil
 }
-
 func (l *mockLogger) Name() string {
 	return "mock"
 }
-
 func (l *mockLogger) Close() error {
+	close(l.c)
+	return nil
+}
+
+type fallibleLogger struct {
+	c chan *Message
+	// Return these errors (or nils) for each Log call. Returns `nil` continuously once empty.
+	errs []error
+}
+
+func (l *fallibleLogger) Log(msg *Message) error {
+	var err error
+	if len(l.errs) > 0 {
+		err, l.errs = l.errs[0], l.errs[1:]
+	}
+	if err == nil {
+		// Only actually log the message if we didn't get an error ("oh no, the TCP stream broke and we couldn't get the message out")
+		l.c <- msg
+	}
+	return err
+}
+func (l *fallibleLogger) Name() string {
+	return "fallible"
+}
+func (l *fallibleLogger) Close() error {
+	close(l.c)
 	return nil
 }
 
@@ -142,6 +166,44 @@ func TestRingDrain(t *testing.T) {
 	ls = r.Drain()
 	if len(ls) != 0 {
 		t.Fatalf("expected 0 messages on 2nd drain: %v", ls)
+	}
+}
+
+func TestRingLossless(t *testing.T) {
+	messages := []*Message{
+		{Line: []byte("a")},
+		{Line: []byte("b")},
+		{Line: []byte("c")},
+	}
+	logger := &fallibleLogger{make(chan *Message), []error{
+		nil,
+		errors.New("oh no broken"),
+		nil,
+	}}
+	ring := NewRingLogger(logger, Info{}, 5)
+
+	for _, msg := range messages {
+		ring.Log(msg)
+	}
+
+	received := []*Message{}
+	for {
+		msg, ok := <-logger.c
+		if !ok {
+			break
+		}
+		received = append(received, msg)
+		if len(received) == len(messages) {
+			ring.Close()
+		}
+	}
+	if len(received) != len(messages) {
+		t.Fatalf("received wrong number of messages from ringbuffer: snt %v, received %v", messages, received)
+	}
+	for i := range len(received) {
+		if messages[i] != received[i] {
+			t.Fatalf("mismatched message order: sent %v, received %v", messages, received)
+		}
 	}
 }
 
